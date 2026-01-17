@@ -37,8 +37,7 @@ wheels/
 .DS_Store
 
 # Data
-data/reminders.json
-data/*.json
+data/
 
 # Logs
 *.log
