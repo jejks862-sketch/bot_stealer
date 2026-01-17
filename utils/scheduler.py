@@ -1,6 +1,7 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +18,20 @@ class ReminderScheduler:
 
     def stop(self):
         if self.scheduler.running:
-            self.scheduler.shutdown()
-            logger.info("Scheduler stopped")
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_closed():
+                    logger.info("Scheduler stopped (event loop already closed)")
+                    return
+            except RuntimeError:
+                logger.info("Scheduler stopped (no event loop)")
+                return
+            
+            try:
+                self.scheduler.shutdown()
+                logger.info("Scheduler stopped")
+            except RuntimeError:
+                logger.info("Scheduler stopped (event loop closed)")
 
     def add_job(self, func, trigger: str, job_id: str, **kwargs):
         try:

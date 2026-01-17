@@ -337,6 +337,21 @@ class AdminCog(commands.Cog):
             value="Отправить объявление",
             inline=False
         )
+        embed.add_field(
+            name="/mystats",
+            value="Показать свою статистику уровня",
+            inline=False
+        )
+        embed.add_field(
+            name="/top",
+            value="Показать топ игроков по уровню",
+            inline=False
+        )
+        embed.add_field(
+            name="/confstats",
+            value="Настроить цвета карточки статистики",
+            inline=False
+        )
         await interaction.response.send_message(embed=embed)
 
     async def handle_roles_skip(self, interaction: discord.Interaction, user_id: int):
@@ -499,7 +514,13 @@ class AdminCog(commands.Cog):
 
                 reminder["role_ids"] = role_ids
                 reminder["channel_id"] = channel_id
-                self.db.save()
+                
+                self.db.update_reminder_roles(reminder["id"], role_ids)
+                reminders_data = self.db._load_reminders()
+                for r in reminders_data["reminders"]:
+                    if r["id"] == reminder["id"]:
+                        r["channel_id"] = channel_id
+                self.db._save_reminders(reminders_data)
 
                 from cogs.notifications import NotificationsCog
                 notifications_cog = self.bot.get_cog("NotificationsCog")
@@ -532,7 +553,7 @@ class AdminCog(commands.Cog):
                 )
                 await message.reply(embed=embed)
 
-    @app_commands.command(name="zov", description="Отправить одноразовое объявление")
+    @app_commands.command(name="zov", description="Отправить объявление")
     @app_commands.describe(
         text="Текст объявления",
         channel_id="ID канала для отправки",
@@ -570,14 +591,18 @@ class AdminCog(commands.Cog):
                     await interaction.response.send_message("❌ ID ролей должны быть числами через запятую")
                     return
 
-            message_text = text
-            if role_mentions:
-                message_text += f"\n{role_mentions}"
+            embed = discord.Embed(
+                title="📢 Объявление",
+                description=text,
+                color=discord.Color.gold()
+            )
+            embed.set_footer(text=f"От: {interaction.user.name}")
             
-            author_name = interaction.user.name
-            message_text += f"\n_От: {author_name}_"
-
-            await channel.send(message_text)
+            if role_mentions:
+                await channel.send(role_mentions, embed=embed)
+            else:
+                await channel.send(embed=embed)
+            
             await interaction.response.send_message(f"✅ Объявление отправлено в <#{channel_id}>")
 
         except Exception as e:

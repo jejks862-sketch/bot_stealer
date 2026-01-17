@@ -44,12 +44,35 @@ class NotificationsCog(commands.Cog):
             channel = guild.text_channels[0] if guild.text_channels else None
         
         if channel:
-            message_text = reminder['message']
+            embed = discord.Embed(
+                title=reminder['name'],
+                description=reminder['message'],
+                color=discord.Color.blue()
+            )
             
-            if role_mentions:
-                message_text += f"\n{role_mentions}"
-            
-            await channel.send(message_text)
+            if role_ids:
+                mentions = []
+                for rid in role_ids:
+                    role = guild.get_role(rid)
+                    if role:
+                        mentions.append(role.mention)
+                role_mentions = " ".join(mentions) if mentions else ""
+                if role_mentions:
+                    await channel.send(role_mentions, embed=embed)
+                else:
+                    await channel.send(embed=embed)
+            else:
+                await channel.send(embed=embed)
+        
+        # Автоудаление одноразового напоминания
+        if not reminder.get("is_recurring", False):
+            self.db.delete_reminder(reminder_id)
+            job_id = f"reminder_{reminder_id}"
+            try:
+                self.scheduler.remove_job(job_id)
+                logger.info(f"One-time reminder {reminder_id} deleted automatically")
+            except:
+                pass
 
     def schedule_reminder(self, reminder: dict, guild_id: int):
         if not reminder["enabled"]:

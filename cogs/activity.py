@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 from utils.database import Database
 import logging
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,37 @@ class ActivityCog(commands.Cog):
 
         if message.channel.id in ACTIVITY_CHANNELS:
             self.db.add_message(message.author.id)
+            
+            user_stats = self.db.get_user_stats(message.author.id)
+            last_exp_time = user_stats.get("last_exp_time")
+            
+            if last_exp_time:
+                last_time = datetime.fromisoformat(last_exp_time)
+                if datetime.now() - last_time < timedelta(minutes=1):
+                    return
+            
+            old_level = user_stats.get("level", 1)
+            new_stats = self.db.add_experience(message.author.id, 25)
+            
+            if new_stats["level"] > old_level:
+                new_roles = self.db.get_roles_for_level(new_stats["level"])
+                old_roles = self.db.get_user_roles(message.author.id)
+                
+                roles_to_add = [rid for rid in new_roles if rid not in old_roles]
+                
+                if roles_to_add:
+                    guild = message.guild
+                    member = message.author
+                    
+                    for role_id in roles_to_add:
+                        try:
+                            role = guild.get_role(role_id)
+                            if role:
+                                await member.add_roles(role)
+                        except:
+                            pass
+                    
+                    self.db.set_user_roles(message.author.id, new_roles)
 
     @app_commands.command(name="activity", description="Посмотреть активность")
     @app_commands.describe(
@@ -135,5 +167,4 @@ class ActivityFilterView(discord.ui.View):
 
 
 async def setup(bot):
-    pass
     pass

@@ -2,8 +2,17 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
+import aiohttp
+import asyncio
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(","))) if os.getenv("ADMIN_IDS") else []
+SYSTEM_PROMPT_FILE = "./data/system_prompt.txt"
 
 MODELS = [
     "gpt-4o-mini",
@@ -14,53 +23,155 @@ MODELS = [
     "gemini-2.5-pro",
     "gemini-3-flash",
     "gpt-3.5-turbo",
-    "gpt-3.5-turbo-0125",
     "gpt-4",
     "gpt-4-turbo",
     "gpt-4o",
-    "gpt-4.1",
     "grok-3"
 ]
+
+
+class AIActionView(discord.ui.View):
+    def __init__(self, user: discord.User, text: str, ai_cog):
+        super().__init__(timeout=3600)
+        self.user = user
+        self.text = text
+        self.ai_cog = ai_cog
+    
+    @discord.ui.button(label="🔄 Повторить", style=discord.ButtonStyle.secondary)
+    async def retry_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user:
+            await interaction.response.send_message("❌ Ты не можешь использовать эту кнопку", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        response = await self.ai_cog.get_ai_response(self.text)
+        
+        if len(response) > 2000:
+            response = response[:2000] + "..."
+        
+        embed = discord.Embed(
+            description=response,
+            color=discord.Color.blue()
+        )
+        
+        await interaction.followup.send(embed=embed, view=AIActionView(self.user, self.text, self.ai_cog))
+    
+    @discord.ui.button(label="⚙️ Промт", style=discord.ButtonStyle.primary)
+    async def prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in ADMIN_IDS:
+            await interaction.response.send_message("❌ Только администраторы могут менять промт", ephemeral=True)
+            return
+        
+        modal = SystemPromptModal(self.ai_cog)
+        await interaction.response.send_modal(modal)
+
+
+class SystemPromptModal(discord.ui.Modal):
+    def __init__(self, ai_cog):
+        super().__init__(title="⚙️ Системный промт ИИ")
+        self.ai_cog = ai_cog
+        
+        self.prompt = discord.ui.TextInput(
+            label="Введи системный промт",
+            style=discord.TextStyle.paragraph,
+            placeholder="Пример: Ты помощник, отвечай на русском языке кратко",
+            required=True,
+            max_length=1000
+        )
+        self.add_item(self.prompt)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            self.ai_cog.save_system_prompt(self.prompt.value)
+            embed = discord.Embed(
+                title="✅ Промт обновлён!",
+                description=f"Новый системный промт: {self.prompt.value[:100]}...",
+                color=discord.Color.green()
+            )
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            logger.error(f"Ошибка сохранения промта: {e}")
+            await interaction.response.send_message(f"❌ Ошибка: {str(e)}", ephemeral=True)
 
 
 class AICog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.system_prompt = self._load_system_prompt()
 
-    async def get_ai_response(self, text: str):
+    def _load_system_prompt(self) -> str:
         try:
-            from openai import OpenAI
-        except ImportError:
-            logger.error("OpenAI библиотека не установлена. Установи: pip install openai")
-            return "❌ Ошибка: OpenAI библиотека не установлена"
+            if os.path.exists(SYSTEM_PROMPT_FILE):
+                with open(SYSTEM_PROMPT_FILE, 'r', encoding='utf-8') as f:
+                    return f.read().strip()
+        except:
+            pass
+        return ""
+    
+    def save_system_prompt(self, prompt: str):
+        os.makedirs(os.path.dirname(SYSTEM_PROMPT_FILE), exist_ok=True)
+        with open(SYSTEM_PROMPT_FILE, 'w', encoding='utf-8') as f:
+            f.write(prompt)
+        self.system_prompt = prompt
+        logger.info(f"Системный промт обновлён: {prompt[:50]}...")
 
-        client = OpenAI(
-            base_url="https://api.onlysq.ru/ai/openai",
-            api_key="openai",
-        )
+    def save_system_prompt(self, prompt: str):
+        os.makedirs(os.path.dirname(SYSTEM_PROMPT_FILE), exist_ok=True)
+        with open(SYSTEM_PROMPT_FILE, 'w', encoding='utf-8') as f:
+            f.write(prompt)
+        self.system_prompt = prompt
+        logger.info(f"Системный промт обновлён: {prompt[:50]}...")
 
+    async def get_ai_response(self, text: str) -> str:
+        api_url = "https://api.onlysq.ru/ai/openai/chat/completions"
+        
+        messages = []
+        if self.system_prompt:
+            messages.append({
+                "role": "system",
+                "content": self.system_prompt
+            })
+        
+        messages.append({
+            "role": "user",
+            "content": text
+        })
+        
         for model in MODELS:
             try:
                 logger.info(f"Попытка использовать модель: {model}")
                 
-                completion = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": text,
-                        },
-                    ],
-                    max_tokens=1000,
-                    timeout=30
-                )
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": 500
+                }
                 
-                response = completion.choices[0].message.content
-                logger.info(f"✅ Успешно использована модель: {model}")
-                return response
+                headers = {
+                    "Authorization": "Bearer openai",
+                    "Content-Type": "application/json"
+                }
                 
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(api_url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            if "choices" in data and len(data["choices"]) > 0:
+                                response = data["choices"][0]["message"]["content"]
+                                logger.info(f"✅ Успешно использована модель: {model}")
+                                
+                                if len(response) > 2000:
+                                    response = response[:2000] + "..."
+                                
+                                return response
+                        else:
+                            logger.debug(f"Модель {model} вернула статус {resp.status}")
+                            
+            except asyncio.TimeoutError:
+                logger.debug(f"Модель {model} истекла по времени")
+                continue
             except Exception as e:
-                logger.debug(f"Модель {model} не работает: {e}")
+                logger.debug(f"Модель {model} не работает: {str(e)}")
                 continue
 
         return "❌ Не удалось получить ответ ни от одной ИИ модели"
@@ -73,18 +184,20 @@ class AICog(commands.Cog):
         try:
             response = await self.get_ai_response(text)
             
-            if len(response) > 2000:
-                chunks = [response[i:i+2000] for i in range(0, len(response), 2000)]
-                
-                for chunk in chunks:
-                    await interaction.followup.send(chunk)
-            else:
-                await interaction.followup.send(response)
+            embed = discord.Embed(
+                description=response,
+                color=discord.Color.blue()
+            )
+            
+            view = AIActionView(interaction.user, text, self)
+            await interaction.followup.send(embed=embed, view=view)
                 
         except Exception as e:
             logger.error(f"Ошибка при обработке AI команды: {e}")
             await interaction.followup.send(f"❌ Ошибка: {str(e)}")
 
 
+
 async def setup(bot):
     await bot.add_cog(AICog(bot))
+

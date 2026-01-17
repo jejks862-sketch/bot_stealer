@@ -9,6 +9,7 @@ from cogs.admin import AdminCog
 from cogs.notifications import NotificationsCog
 from cogs.activity import ActivityCog
 from cogs.ai import AICog
+from cogs.users import UsersCog
 
 load_dotenv()
 
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(","))) if os.getenv("ADMIN_IDS") else []
-DATABASE_PATH = os.getenv("DATABASE_PATH", "./data/reminders.json")
+DATABASE_PATH = os.getenv("DATABASE_PATH", "./data")
 
 if not TOKEN:
     logger.error("DISCORD_TOKEN не установлен в .env файле")
@@ -39,6 +40,7 @@ scheduler = ReminderScheduler()
 
 @bot.event
 async def on_ready():
+    await bot.tree.sync()
     scheduler.start()
 
     for guild in bot.guilds:
@@ -81,11 +83,13 @@ async def load_cogs():
     notifications_cog = NotificationsCog(bot, db, scheduler)
     activity_cog = ActivityCog(bot, db)
     ai_cog = AICog(bot)
+    users_cog = UsersCog(bot, db)
 
     await bot.add_cog(admin_cog)
     await bot.add_cog(notifications_cog)
     await bot.add_cog(activity_cog)
     await bot.add_cog(ai_cog)
+    await bot.add_cog(users_cog)
 
 
 async def main():
