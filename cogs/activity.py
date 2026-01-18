@@ -78,8 +78,8 @@ class ActivityCog(commands.Cog):
             new_stats = self.db.add_experience(message.author.id, 25)
             
             if new_stats["level"] > old_level:
-            new_role = self.db.get_roles_for_level(new_stats["level"], message.guild.id)
-            old_role = self.db.get_roles_for_level(old_level, message.guild.id)
+                new_role = self.db.get_roles_for_level(new_stats["level"], message.guild.id)
+                old_role = self.db.get_roles_for_level(old_level, message.guild.id)
                 guild = message.guild
                 member = message.author
                 
