@@ -20,7 +20,6 @@ class NotificationsCog(commands.Cog):
 
         guild = self.bot.get_guild(guild_id)
         if not guild:
-            logger.warning(f"Guild {guild_id} not found")
             return
 
         role_mentions = ""
@@ -70,7 +69,6 @@ class NotificationsCog(commands.Cog):
             job_id = f"reminder_{reminder_id}"
             try:
                 self.scheduler.remove_job(job_id)
-                logger.info(f"One-time reminder {reminder_id} deleted automatically")
             except:
                 pass
 
@@ -111,9 +109,8 @@ class NotificationsCog(commands.Cog):
                     job_id=job_id
                 )
 
-            logger.info(f"Reminder {reminder['id']} scheduled")
         except Exception as e:
-            logger.error(f"Error scheduling reminder {reminder['id']}: {e}")
+            pass
 
 
 async def setup(bot):

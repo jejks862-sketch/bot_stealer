@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 from utils.database import Database
 import logging
@@ -7,26 +7,63 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-ACTIVITY_CHANNELS = [
-    1461386311171702950,
-    1458718606945812543,
-    1444024262846578831,
-    1459779624186941481,
-    1459726206877306921
-]
-
 
 class ActivityCog(commands.Cog):
     def __init__(self, bot, db: Database):
         self.bot = bot
         self.db = db
+        self.voice_sessions = {}
+        self.voice_xp_task.start()
+    
+    @tasks.loop(minutes=10)
+    async def voice_xp_task(self):
+        now = datetime.now()
+        for user_id, session in list(self.voice_sessions.items()):
+            time_in_voice = now - session["joined_at"]
+            minutes = time_in_voice.total_seconds() / 60
+            
+            if minutes >= 10:
+                old_level = self.db.get_user_stats(user_id).get("level", 1)
+                new_stats = self.db.add_experience(user_id, 100)
+                session["last_award"] = now
+                
+                if new_stats["level"] > old_level:
+                    guild = self.bot.get_guild(session["guild_id"])
+                    member = guild.get_member(user_id) if guild else None
+                    
+                    if member and guild:
+                        old_role = self.db.get_roles_for_level(old_level, guild.id)
+                        new_role = self.db.get_roles_for_level(new_stats["level"], guild.id)
+                        
+                        if old_role:
+                            try:
+                                role = guild.get_role(old_role[0])
+                                if role:
+                                    await member.remove_roles(role)
+                            except Exception:
+                                pass
+                        
+                        if new_role:
+                            try:
+                                role = guild.get_role(new_role[0])
+                                if role:
+                                    await member.add_roles(role)
+                            except Exception:
+                                pass
+    
+    @voice_xp_task.before_loop
+    async def before_voice_xp_task(self):
+        await self.bot.wait_until_ready()
 
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author == self.bot.user:
             return
 
-        if message.channel.id in ACTIVITY_CHANNELS:
+        guild_settings = self.db.get_guild_settings(message.guild.id)
+        activity_channels = guild_settings["activity_channels"]
+        
+        if message.channel.id in activity_channels:
             self.db.add_message(message.author.id)
             
             user_stats = self.db.get_user_stats(message.author.id)
@@ -41,24 +78,26 @@ class ActivityCog(commands.Cog):
             new_stats = self.db.add_experience(message.author.id, 25)
             
             if new_stats["level"] > old_level:
-                new_roles = self.db.get_roles_for_level(new_stats["level"])
-                old_roles = self.db.get_user_roles(message.author.id)
+            new_role = self.db.get_roles_for_level(new_stats["level"], message.guild.id)
+            old_role = self.db.get_roles_for_level(old_level, message.guild.id)
+                guild = message.guild
+                member = message.author
                 
-                roles_to_add = [rid for rid in new_roles if rid not in old_roles]
+                if old_role:
+                    try:
+                        role = guild.get_role(old_role[0])
+                        if role:
+                            await member.remove_roles(role)
+                    except Exception:
+                        pass
                 
-                if roles_to_add:
-                    guild = message.guild
-                    member = message.author
-                    
-                    for role_id in roles_to_add:
-                        try:
-                            role = guild.get_role(role_id)
-                            if role:
-                                await member.add_roles(role)
-                        except:
-                            pass
-                    
-                    self.db.set_user_roles(message.author.id, new_roles)
+                if new_role:
+                    try:
+                        role = guild.get_role(new_role[0])
+                        if role:
+                            await member.add_roles(role)
+                    except Exception:
+                        pass
 
     @app_commands.command(name="activity", description="Посмотреть активность")
     @app_commands.describe(
@@ -81,23 +120,49 @@ class ActivityCog(commands.Cog):
             await interaction.followup.send("❌ Нет данных об активности")
             return
         
-        embed = discord.Embed(
-            title="📊 Топ 100 активных пользователей",
-            color=discord.Color.purple()
-        )
+        users_per_page = 10
+        total_pages = (len(top_users) + users_per_page - 1) // users_per_page
         
-        activity_text = ""
-        for idx, (user_id, count) in enumerate(top_users[:100], 1):
-            activity_text += f"{idx}. <@{user_id}> - {count} сообщений\n"
-            if len(activity_text) > 1000:
-                embed.add_field(name=f"Рейтинг {idx-20}-{idx}", value=activity_text, inline=False)
-                activity_text = ""
-        
-        if activity_text:
+        async def show_page(callback_interaction, page=0):
+            start = page * users_per_page
+            end = start + users_per_page
+            page_users = top_users[start:end]
+            
+            embed = discord.Embed(
+                title=f"📊 Топ активных пользователей (стр. {page + 1}/{total_pages})",
+                color=discord.Color.purple()
+            )
+            
+            activity_text = ""
+            for idx, (user_id, count) in enumerate(page_users, start + 1):
+                activity_text += f"{idx}. <@{user_id}> - {count} сообщений\n"
+            
             embed.add_field(name="Рейтинг", value=activity_text, inline=False)
+            
+            buttons_view = discord.ui.View()
+            
+            if page > 0:
+                prev_btn = discord.ui.Button(label="← Пред.", style=discord.ButtonStyle.secondary)
+                async def prev_cb(btn_i):
+                    await btn_i.response.defer()
+                    await show_page(btn_i, page - 1)
+                prev_btn.callback = prev_cb
+                buttons_view.add_item(prev_btn)
+            
+            if page < total_pages - 1:
+                next_btn = discord.ui.Button(label="Далее →", style=discord.ButtonStyle.secondary)
+                async def next_cb(btn_i):
+                    await btn_i.response.defer()
+                    await show_page(btn_i, page + 1)
+                next_btn.callback = next_cb
+                buttons_view.add_item(next_btn)
+            
+            if callback_interaction == interaction:
+                await callback_interaction.followup.send(embed=embed, view=buttons_view)
+            else:
+                await callback_interaction.followup.send(embed=embed, view=buttons_view)
         
-        view = ActivityFilterView(self.db, interaction.user)
-        await interaction.followup.send(embed=embed, view=view)
+        await show_page(interaction)
 
 
 class ActivityFilterView(discord.ui.View):
@@ -164,6 +229,22 @@ class ActivityFilterView(discord.ui.View):
             embed.add_field(name="Рейтинг", value=activity_text, inline=False)
         
         await interaction.followup.send(embed=embed)
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member, before, after):
+        user_id = member.id
+        guild_id = member.guild.id
+        
+        if before.channel is None and after.channel is not None:
+            self.voice_sessions[user_id] = {
+                "joined_at": datetime.now(),
+                "guild_id": guild_id,
+                "last_award": datetime.now()
+            }
+        
+        elif before.channel is not None and after.channel is None:
+            if user_id in self.voice_sessions:
+                del self.voice_sessions[user_id]
 
 
 async def setup(bot):

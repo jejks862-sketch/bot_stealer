@@ -90,7 +90,6 @@ class SystemPromptModal(discord.ui.Modal):
             )
             await interaction.response.send_message(embed=embed)
         except Exception as e:
-            logger.error(f"Ошибка сохранения промта: {e}")
             await interaction.response.send_message(f"❌ Ошибка: {str(e)}", ephemeral=True)
 
 
@@ -113,14 +112,6 @@ class AICog(commands.Cog):
         with open(SYSTEM_PROMPT_FILE, 'w', encoding='utf-8') as f:
             f.write(prompt)
         self.system_prompt = prompt
-        logger.info(f"Системный промт обновлён: {prompt[:50]}...")
-
-    def save_system_prompt(self, prompt: str):
-        os.makedirs(os.path.dirname(SYSTEM_PROMPT_FILE), exist_ok=True)
-        with open(SYSTEM_PROMPT_FILE, 'w', encoding='utf-8') as f:
-            f.write(prompt)
-        self.system_prompt = prompt
-        logger.info(f"Системный промт обновлён: {prompt[:50]}...")
 
     async def get_ai_response(self, text: str) -> str:
         api_url = "https://api.onlysq.ru/ai/openai/chat/completions"
@@ -139,8 +130,6 @@ class AICog(commands.Cog):
         
         for model in MODELS:
             try:
-                logger.info(f"Попытка использовать модель: {model}")
-                
                 payload = {
                     "model": model,
                     "messages": messages,
@@ -153,25 +142,20 @@ class AICog(commands.Cog):
                 }
                 
                 async with aiohttp.ClientSession() as session:
-                    async with session.post(api_url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    async with session.post(api_url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=10, connect=5)) as resp:
                         if resp.status == 200:
                             data = await resp.json()
                             if "choices" in data and len(data["choices"]) > 0:
                                 response = data["choices"][0]["message"]["content"]
-                                logger.info(f"✅ Успешно использована модель: {model}")
                                 
                                 if len(response) > 2000:
                                     response = response[:2000] + "..."
                                 
                                 return response
-                        else:
-                            logger.debug(f"Модель {model} вернула статус {resp.status}")
                             
             except asyncio.TimeoutError:
-                logger.debug(f"Модель {model} истекла по времени")
                 continue
             except Exception as e:
-                logger.debug(f"Модель {model} не работает: {str(e)}")
                 continue
 
         return "❌ Не удалось получить ответ ни от одной ИИ модели"
@@ -193,7 +177,7 @@ class AICog(commands.Cog):
             await interaction.followup.send(embed=embed, view=view)
                 
         except Exception as e:
-            logger.error(f"Ошибка при обработке AI команды: {e}")
+            pass
             await interaction.followup.send(f"❌ Ошибка: {str(e)}")
 
 

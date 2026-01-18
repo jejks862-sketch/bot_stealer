@@ -10,6 +10,7 @@ from cogs.notifications import NotificationsCog
 from cogs.activity import ActivityCog
 from cogs.ai import AICog
 from cogs.users import UsersCog
+from cogs.settings import SettingsCog
 
 load_dotenv()
 
@@ -59,6 +60,15 @@ async def on_ready():
 
 @bot.event
 async def on_guild_join(guild):
+    db.register_guild(guild.id, guild.name)
+    
+    for member in guild.members:
+        db.add_guild_member(guild.id, member.id)
+        db._ensure_user_exists(member.id)
+        
+        if member.guild_permissions.administrator:
+            pass
+    
     for channel in guild.text_channels:
         if channel.permissions_for(guild.me).send_messages:
             embed = discord.Embed(
@@ -74,6 +84,23 @@ async def on_guild_join(guild):
 
 
 @bot.event
+async def on_member_join(member):
+    db._ensure_user_exists(member.id)
+    db.add_guild_member(member.guild.id, member.id)
+
+
+@bot.event
+async def on_message(message):
+    if message.author == bot.user or not message.guild:
+        return
+    
+    db._ensure_user_exists(message.author.id)
+    db.add_guild_member(message.guild.id, message.author.id)
+    
+    await bot.process_commands(message)
+
+
+@bot.event
 async def on_error(event, *args, **kwargs):
     pass
 
@@ -84,12 +111,14 @@ async def load_cogs():
     activity_cog = ActivityCog(bot, db)
     ai_cog = AICog(bot)
     users_cog = UsersCog(bot, db)
+    settings_cog = SettingsCog(bot, db)
 
     await bot.add_cog(admin_cog)
     await bot.add_cog(notifications_cog)
     await bot.add_cog(activity_cog)
     await bot.add_cog(ai_cog)
     await bot.add_cog(users_cog)
+    await bot.add_cog(settings_cog)
 
 
 async def main():
